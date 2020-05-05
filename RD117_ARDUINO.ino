@@ -77,6 +77,7 @@
 #include <Arduino.h>
 #include "algorithm.h"
 #include "max30102.h"
+#include <M5Stack.h>
 
 //if Adafruit Flora development board is chosen, include NeoPixel library and define an NeoPixel object
 #if defined(ARDUINO_AVR_FLORA8)
@@ -86,6 +87,8 @@ Adafruit_NeoPixel LED = Adafruit_NeoPixel(1, 8, NEO_GRB + NEO_KHZ800);
 #endif
 
 #define MAX_BRIGHTNESS 255
+
+#define INT_PORT_NUM (2)
 
 #if defined(ARDUINO_AVR_UNO)
 //Arduino Uno doesn't have enough SRAM to store 100 samples of IR led data and red led data in 32-bit format
@@ -103,9 +106,23 @@ int32_t n_heart_rate; //heart rate value
 int8_t  ch_hr_valid;  //indicator to show if the heart rate calculation is valid
 uint8_t uch_dummy;
 
+char heart_char[] = {'-', '\\', '|', '/'};
+uint8_t heart_count;
+char str[128];
 
 // the setup routine runs once when you press reset:
 void setup() {
+    M5.begin();
+    Wire.begin();
+    M5.Power.begin();
+    M5.Lcd.fillScreen(WHITE);
+
+    M5.Lcd.setTextColor(RED);
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setCursor(20, M5.Lcd.height()-20);
+    M5.Lcd.print("* NOT FOR MEDICAL USE *");
+
+    heart_count = 0;
 
 #if defined(ARDUINO_AVR_LILYPAD_USB)    
   pinMode(13, OUTPUT);  //LED output pin on Lilypad
@@ -119,10 +136,11 @@ void setup() {
 
   maxim_max30102_reset(); //resets the MAX30102
   // initialize serial communication at 115200 bits per second:
-  Serial.begin(115200);
-  pinMode(10, INPUT);  //pin D10 connects to the interrupt output pin of the MAX30102
+  //Serial.begin(115200);
+  pinMode(INT_PORT_NUM, INPUT);  //pin D10 connects to the interrupt output pin of the MAX30102
   delay(1000);
   maxim_max30102_read_reg(REG_INTR_STATUS_1,&uch_dummy);  //Reads/clears the interrupt status register
+  if (0) { // disable for M5Core
   while(Serial.available()==0)  //wait until user presses a key
   {
     Serial.write(27);       // ESC command
@@ -137,6 +155,7 @@ void setup() {
     delay(1000);
   }
   uch_dummy=Serial.read();
+  }
   maxim_max30102_init();  //initialize the MAX30102
 }
 
@@ -146,6 +165,8 @@ void loop() {
   int32_t i;
   float f_temp;
   
+  M5.update();
+
   un_brightness=0;
   un_min=0x3FFFF;
   un_max=0;
@@ -155,17 +176,22 @@ void loop() {
   //read the first 100 samples, and determine the signal range
   for(i=0;i<n_ir_buffer_length;i++)
   {
-    while(digitalRead(10)==1);  //wait until the interrupt pin asserts
+    while(digitalRead(INT_PORT_NUM)==1);  //wait until the interrupt pin asserts
     maxim_max30102_read_fifo((aun_red_buffer+i), (aun_ir_buffer+i));  //read from MAX30102 FIFO
     
     if(un_min>aun_red_buffer[i])
       un_min=aun_red_buffer[i];  //update signal min
     if(un_max<aun_red_buffer[i])
       un_max=aun_red_buffer[i];  //update signal max
+    /*
     Serial.print(F("red="));
     Serial.print(aun_red_buffer[i], DEC);
     Serial.print(F(", ir="));
     Serial.println(aun_ir_buffer[i], DEC);
+    */
+    M5.Lcd.setCursor(5, 10);
+    M5.Lcd.print(heart_char[heart_count++]);
+    heart_count %= 4;
   }
   un_prev_data=aun_red_buffer[i];
   //calculate heart rate and SpO2 after first 100 samples (first 4 seconds of samples)
@@ -195,7 +221,7 @@ void loop() {
     for(i=75;i<100;i++)
     {
       un_prev_data=aun_red_buffer[i-1];
-      while(digitalRead(10)==1);
+      while(digitalRead(INT_PORT_NUM)==1);
       digitalWrite(9, !digitalRead(9));
       maxim_max30102_read_fifo((aun_red_buffer+i), (aun_ir_buffer+i));
 
@@ -229,6 +255,7 @@ void loop() {
       LED.show();
 #endif
 
+      /*
       //send samples and calculation result to terminal program through UART
       Serial.print(F("red="));
       Serial.print(aun_red_buffer[i], DEC);
@@ -246,6 +273,27 @@ void loop() {
 
       Serial.print(F(", SPO2Valid="));
       Serial.println(ch_spo2_valid, DEC);
+      */
+
+      M5.Lcd.fillRect(0, 18, M5.Lcd.width(), 80, WHITE);
+      M5.Lcd.setTextColor(BLACK);
+      M5.Lcd.setTextSize(2);
+
+      M5.Lcd.setCursor(5, 40);
+      if (ch_hr_valid) {
+        sprintf(str, "Heart rate: %3d bpm", (int)n_heart_rate);
+      } else {
+        sprintf(str, "Heart rate: --- bpm");
+      }
+      M5.Lcd.print(str);
+
+      M5.Lcd.setCursor(5, 60);
+      if (ch_spo2_valid) {
+        sprintf(str, "SpO2: %3d %", (int)n_spo2);
+      } else {
+        sprintf(str, "SpO2: --- %");
+      }
+      M5.Lcd.print(str);
     }
     maxim_heart_rate_and_oxygen_saturation(aun_ir_buffer, n_ir_buffer_length, aun_red_buffer, &n_spo2, &ch_spo2_valid, &n_heart_rate, &ch_hr_valid); 
   }
